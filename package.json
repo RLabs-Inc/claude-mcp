@@ -1,0 +1,36 @@
+{
+  "name": "claude-mcp",
+  "version": "0.1.0",
+  "description": "MCP server to host tools extending Claude's capabilities",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun --watch src/index.ts",
+    "lint": "bun eslint src",
+    "test": "bun test",
+    "build": "bun build ./src/index.ts --target bun --outdir ./dist",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write 'src/**/*.{ts,tsx,js,jsx}'",
+    "clean": "rm -rf dist docs/*/*/processed"
+  },
+  "dependencies": {
+    "hono": "^3.10.2",
+    "@hono/node-server": "^1.2.0",
+    "@hono/zod-validator": "^0.1.8",
+    "zod": "^3.22.4",
+    "cheerio": "^1.0.0-rc.12",
+    "puppeteer": "^21.5.2",
+    "marked": "^9.1.5",
+    "turndown": "^7.1.2",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "bun-types": "latest",
+    "typescript": "^5.2.2",
+    "@typescript-eslint/eslint-plugin": "^6.11.0",
+    "@typescript-eslint/parser": "^6.11.0",
+    "eslint": "^8.54.0",
+    "prettier": "^3.0.3",
+    "@types/node": "^20.9.0"
+  }
+}

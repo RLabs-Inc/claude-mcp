@@ -1,0 +1,92 @@
+/**
+ * Registry of framework documentation sources
+ */
+export const FRAMEWORK_REGISTRY: Record<string, {
+  type: 'npm' | 'github' | 'python' | 'custom',
+  repo?: string,
+  packageName?: string,
+  pythonPackage?: string,
+  docsUrl?: string,
+  apiDocsUrl?: string,
+  githubDocsDir?: string,
+  latestVersionUrl?: string,
+  docsSections?: string[],
+  customVersionExtractor?: (data: string) => string
+}> = {
+  'react': {
+    type: 'npm',
+    packageName: 'react',
+    docsUrl: 'https://react.dev/reference',
+  },
+  'vue': {
+    type: 'npm',
+    packageName: 'vue',
+    docsUrl: 'https://vuejs.org/guide',
+  },
+  'angular': {
+    type: 'npm',
+    packageName: '@angular/core',
+    docsUrl: 'https://angular.io/docs',
+  },
+  'svelte': {
+    type: 'npm',
+    packageName: 'svelte',
+    docsUrl: 'https://svelte.dev/docs',
+  },
+  'express': {
+    type: 'npm',
+    packageName: 'express',
+    docsUrl: 'https://expressjs.com/en/4x/api.html',
+  },
+  'next': {
+    type: 'npm',
+    packageName: 'next',
+    docsUrl: 'https://nextjs.org/docs',
+  },
+  'hono': {
+    type: 'npm',
+    packageName: 'hono',
+    docsUrl: 'https://hono.dev',
+  },
+  'remix': {
+    type: 'npm',
+    packageName: '@remix-run/server-runtime',
+    docsUrl: 'https://remix.run/docs/en/main',
+  },
+  'langchain': {
+    type: 'python',
+    pythonPackage: 'langchain',
+    docsUrl: 'https://python.langchain.com/docs/get_started',
+    apiDocsUrl: 'https://api.python.langchain.com/en/latest/',
+    repo: 'langchain-ai/langchain',
+    githubDocsDir: 'docs/docs',
+    docsSections: [
+      'get_started',
+      'modules',
+      'integrations',
+      'guides',
+      'ecosystem',
+      'api_reference'
+    ]
+  },
+  'langchain-js': {
+    type: 'npm',
+    packageName: 'langchain',
+    docsUrl: 'https://js.langchain.com/docs/',
+    apiDocsUrl: 'https://api.js.langchain.com/index.html',
+    repo: 'langchain-ai/langchainjs',
+    githubDocsDir: 'docs/docs'
+  },
+  'fastapi': {
+    type: 'python',
+    pythonPackage: 'fastapi',
+    docsUrl: 'https://fastapi.tiangolo.com/',
+    repo: 'tiangolo/fastapi',
+    githubDocsDir: 'docs',
+    docsSections: [
+      'tutorial',
+      'advanced',
+      'reference'
+    ]
+  },
+};
