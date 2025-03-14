@@ -1,7 +1,11 @@
+import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { logger } from '../../lib/logger';
+
 /**
- * Registry of framework documentation sources
+ * Framework registry type definition
  */
-export const FRAMEWORK_REGISTRY: Record<string, {
+export type FrameworkRegistry = Record<string, {
   type: 'npm' | 'github' | 'python' | 'custom',
   repo?: string,
   packageName?: string,
@@ -12,7 +16,12 @@ export const FRAMEWORK_REGISTRY: Record<string, {
   latestVersionUrl?: string,
   docsSections?: string[],
   customVersionExtractor?: (data: string) => string
-}> = {
+}>;
+
+/**
+ * Default frameworks to include in the registry
+ */
+const DEFAULT_FRAMEWORKS: FrameworkRegistry = {
   'react': {
     type: 'npm',
     packageName: 'react',
@@ -43,10 +52,23 @@ export const FRAMEWORK_REGISTRY: Record<string, {
     packageName: 'next',
     docsUrl: 'https://nextjs.org/docs',
   },
+  'superforms': {
+    type: 'npm',
+    packageName: 'superforms',
+    docsUrl: 'https://superforms.rocks',
+  },
   'hono': {
     type: 'npm',
     packageName: 'hono',
-    docsUrl: 'https://hono.dev',
+    docsUrl: 'https://hono.dev/docs/top',
+    docsSections: [
+      'top',
+      'concepts',
+      'api',
+      'helpers',
+      'middleware',
+      'guides'
+    ]
   },
   'remix': {
     type: 'npm',
@@ -90,3 +112,92 @@ export const FRAMEWORK_REGISTRY: Record<string, {
     ]
   },
 };
+
+// File where we'll store the registry
+const DATA_DIR = join(process.cwd(), 'data');
+const REGISTRY_FILE = join(DATA_DIR, 'framework-registry.json');
+
+/**
+ * Initialize the registry storage directory
+ */
+function initializeStorage(): void {
+  try {
+    if (!existsSync(DATA_DIR)) {
+      mkdirSync(DATA_DIR, { recursive: true });
+      logger.info('Created data directory for framework registry');
+    }
+  } catch (error) {
+    logger.error('Failed to create data directory for framework registry', {error});
+    // Continue without persistence in case of directory creation failure
+  }
+}
+
+/**
+ * Load the framework registry from disk
+ * If the file doesn't exist, returns the default frameworks
+ */
+function loadRegistry(): FrameworkRegistry {
+  try {
+    initializeStorage();
+    
+    if (!existsSync(REGISTRY_FILE)) {
+      logger.info('Registry file not found, using default frameworks');
+      return {...DEFAULT_FRAMEWORKS};
+    }
+    
+    const data = readFileSync(REGISTRY_FILE, 'utf-8');
+    const loadedRegistry = JSON.parse(data);
+    
+    // Restore any non-serializable properties (like functions)
+    Object.keys(loadedRegistry).forEach(framework => {
+      if (loadedRegistry[framework].customVersionExtractor) {
+        // We can't serialize functions, so we need to restore them from defaults if they exist
+        if (
+          DEFAULT_FRAMEWORKS[framework] && 
+          DEFAULT_FRAMEWORKS[framework].customVersionExtractor
+        ) {
+          loadedRegistry[framework].customVersionExtractor = 
+            DEFAULT_FRAMEWORKS[framework].customVersionExtractor;
+        } else {
+          // If we don't have a default, we'll need to drop this property
+          delete loadedRegistry[framework].customVersionExtractor;
+        }
+      }
+    });
+    
+    logger.info(`Loaded ${Object.keys(loadedRegistry).length} frameworks from registry file`);
+    return loadedRegistry;
+  } catch (error) {
+    logger.error('Failed to load framework registry from disk', {error});
+    return {...DEFAULT_FRAMEWORKS};
+  }
+}
+
+/**
+ * Save the framework registry to disk
+ */
+export function saveRegistry(registry: FrameworkRegistry): void {
+  try {
+    initializeStorage();
+    
+    // We need to remove non-serializable properties before saving
+    const serializableRegistry = JSON.parse(JSON.stringify(registry));
+    
+    writeFileSync(
+      REGISTRY_FILE, 
+      JSON.stringify(serializableRegistry, null, 2), 
+      'utf-8'
+    );
+    
+    logger.info(`Saved ${Object.keys(registry).length} frameworks to registry file`);
+  } catch (error) {
+    logger.error('Failed to save framework registry to disk', {error});
+    // Continue without persistence in case of save failure
+  }
+}
+
+/**
+ * The registry of framework documentation sources
+ * Loaded from disk or initialized with defaults
+ */
+export const FRAMEWORK_REGISTRY: FrameworkRegistry = loadRegistry();

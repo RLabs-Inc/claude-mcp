@@ -25,6 +25,8 @@ Discovers, fetches, and processes the latest documentation for frameworks and li
 - **Documentation Scraping**: Uses headless browsers to scrape official documentation sites
 - **Content Processing**: Extracts relevant content and converts to structured formats (JSON/Markdown)
 - **API Reference Handling**: Separately processes API documentation for comprehensive coverage
+- **Rate Limiting Awareness**: Intelligent rate limiting to respect website policies
+- **Smart Crawling**: Prioritizes important documentation pages and adapts to site structure
 
 Supported frameworks include:
 - **LangChain** (Python and JavaScript)
@@ -139,18 +141,18 @@ curl -X POST http://localhost:3000/claude-code/install
 source ~/.claude-code/plugins/claude-mcp/activate.sh
 
 # Use documentation tools
-claude docs langchain               # Fetch and use LangChain documentation
-claude versions fastapi             # List available FastAPI versions
+claude fetch-docs langchain               # Fetch and use LangChain documentation
+claude list-versions fastapi              # List available FastAPI versions
 
 # List all available tools
-claude tools list                   # See all available tools
-claude tools info docs-fetcher      # Get information about a specific tool
+claude tools list                         # See all available tools
+claude tools info docs-fetcher            # Get information about a specific tool
 
 # Use any tool directly
-claude tool:docs-fetcher frameworks # List supported frameworks
+claude tool:docs-fetcher frameworks       # List supported frameworks
 ```
 
-When you use `claude docs` to fetch documentation for a framework, Claude Code will automatically have access to this documentation when writing code. As you add more tools to the MCP server, they will automatically be available through the Claude Code CLI.
+When you use `claude fetch-docs` to fetch documentation for a framework, Claude Code will automatically have access to this documentation when writing code. As you add more tools to the MCP server, they will automatically be available through the Claude Code CLI.
 
 ### HTTP API Integration
 
@@ -172,14 +174,27 @@ console.log(`Latest version: ${data.latestVersion}`);
 ### 2. Fetching Documentation
 
 ```typescript
-// Claude can generate code to fetch and process documentation
+// Add a new framework to the registry
+const addResponse = await fetch('http://localhost:3000/api/tools/docs-fetcher/framework', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    name: 'new-framework',
+    type: 'npm',
+    packageName: 'new-framework',
+    docsUrl: 'https://new-framework.dev/docs'
+  })
+});
+
+// Fetch documentation for a framework
 const response = await fetch('http://localhost:3000/api/tools/docs-fetcher/fetch', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ 
     framework: 'fastapi',
     storageFormat: 'markdown',
-    processContent: true
+    processContent: true,
+    maxPages: 20     // Limit the number of pages (faster for testing)
   })
 });
 const data = await response.json();
@@ -212,6 +227,20 @@ if (data.available && data.upToDate) {
   - Query params:
     - `type`: Filter by type (`all`, `npm`, `python`, `github`, `custom`)
 
+- `POST /api/tools/docs-fetcher/framework` - Add a new framework to the registry
+  - Body:
+    ```json
+    {
+      "name": "new-framework",
+      "type": "npm",
+      "packageName": "new-framework",
+      "docsUrl": "https://new-framework.dev/docs",
+      "apiDocsUrl": "https://api.new-framework.dev"
+    }
+    ```
+
+- `DELETE /api/tools/docs-fetcher/framework/:name` - Remove a framework from the registry
+
 - `POST /api/tools/docs-fetcher/latest-version` - Get latest version of a framework
   - Body:
     ```json
@@ -224,11 +253,113 @@ if (data.available && data.upToDate) {
     {
       "framework": "fastapi",
       "storageFormat": "json|markdown",
-      "processContent": true|false
+      "processContent": true|false,
+      "maxPages": 20
     }
     ```
   
 - `GET /api/tools/docs-fetcher/status/:framework` - Check documentation status
+
+- `POST /api/tools/docs-fetcher/search` - Search documentation
+  - Body:
+    ```json
+    {
+      "query": "state management",
+      "framework": "react",
+      "limit": 10
+    }
+    ```
+
+## 🔍 Search Functionality
+
+The documentation tool includes a robust search system that allows Claude to quickly find relevant information:
+
+```bash
+# Search the documentation for a specific term
+curl -X POST http://localhost:3000/api/tools/docs-fetcher/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "state management", "framework": "react", "mode": "hybrid"}'
+```
+
+The search system supports three modes with automatic fallback:
+- `semantic`: Finds content based on meaning using neural embeddings (best for conceptual queries)
+- `keyword`: Traditional text search for exact term matches (best for API names)
+- `hybrid`: Combines both approaches for comprehensive results (default)
+
+If semantic search is unavailable, the system automatically falls back to keyword search.
+
+Additional search options:
+```json
+{
+  "query": "How to handle state in React components",
+  "framework": "react",
+  "version": "18.0.0",
+  "mode": "hybrid",
+  "hybridAlpha": 0.7,
+  "limit": 20
+}
+```
+
+The system includes tools for rebuilding and optimizing search indexes:
+
+```bash
+# Rebuild search indexes
+curl -X POST http://localhost:3000/api/tools/docs-fetcher/search/rebuild
+
+# Check search stats
+curl http://localhost:3000/api/tools/docs-fetcher/search/stats
+```
+
+Search results include relevant snippets and context that Claude can use when generating code, making the documentation much more accessible and useful.
+
+## ✨ Usage Examples
+
+### Fetch React Documentation (Small Sample)
+
+```bash
+# Get a small sample for testing (5 pages)
+curl -X POST http://localhost:3000/api/tools/docs-fetcher/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"framework": "react", "processContent": true, "maxPages": 5}'
+```
+
+### Fetch Complete Documentation
+
+```bash
+# Get comprehensive documentation (may take several minutes)
+curl -X POST http://localhost:3000/api/tools/docs-fetcher/fetch \
+  -H "Content-Type: application/json" \
+  -d '{"framework": "fastapi", "processContent": true, "maxPages": 100}'
+```
+
+### Check Latest FastAPI Version
+
+```bash
+curl -X POST http://localhost:3000/api/tools/docs-fetcher/latest-version \
+  -H "Content-Type: application/json" \
+  -d '{"framework": "fastapi"}'
+```
+
+### Use with Claude Code CLI
+
+After [installing the Claude Code plugin](#claude-code-cli-integration):
+
+```bash
+# Fetch latest documentation (small sample for testing)
+claude fetch-docs langchain --maxpages 5
+
+# Add a new framework interactively (via CLI)
+bun docadd add
+
+# Or fetch documentation for a new framework directly
+bun docadd fetch fastapi --max-pages 20
+
+# List available frameworks
+claude tool:docs-fetcher frameworks
+
+# Search documentation
+claude tool:docs-fetcher search --query "agents" --framework langchain
+```
 
 ## 🧩 Architecture
 
@@ -264,21 +395,40 @@ The system follows a modular architecture:
 
 ### Adding a New Framework to Docs Fetcher
 
-1. Edit `src/tools/docs-fetcher/registry.ts` to add the framework configuration:
+Use the interactive CLI tool to add a new framework:
 
-```typescript
-'your-framework': {
-  type: 'npm', // or 'python', 'github', 'custom'
-  packageName: 'your-package-name', // for npm
-  pythonPackage: 'your-package-name', // for python
-  docsUrl: 'https://your-framework.dev/docs',
-  apiDocsUrl: 'https://api.your-framework.dev',
-  repo: 'username/repo', // for GitHub
-  docsSections: ['guide', 'api', 'examples']
-}
+```bash
+# Run the documentation management tool
+bun docadd add
+
+# Follow the interactive prompts to add details about the framework
 ```
 
-2. If needed, create a specialized scraper in `scrapers.ts`
+The CLI will guide you through the following prompts:
+1. Framework name (e.g., react, vue, fastapi)
+2. Framework type (NPM Package, Python Package, GitHub Repository, or Custom)
+3. Type-specific information (package name, Python package, or GitHub repo)
+4. Main documentation URL
+5. Whether the framework has separate API documentation (and the URL if applicable)
+6. Option to fetch documentation for the framework immediately
+
+You can also use these additional commands:
+
+```bash
+# Fetch documentation for an existing framework
+bun docadd fetch fastapi --max-pages 20
+
+# List all registered frameworks
+bun docadd list
+
+# List frameworks of a specific type
+bun docadd list --type npm
+
+# Remove a framework from the registry
+bun docadd remove vue
+```
+
+All registry changes are automatically saved to disk and will persist between server restarts.
 
 ### Creating a New Tool
 
@@ -341,56 +491,88 @@ export default yourTool;
    claude tool:your-tool-name example
    ```
 
-## 🔍 Search Functionality
-
-The documentation tool includes a built-in search system that allows Claude to quickly find relevant information:
-
-```bash
-# Search the documentation for a specific term
-curl -X POST http://localhost:3000/api/tools/docs-fetcher/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "state management", "framework": "react"}'
-```
-
-Search results include relevant code snippets and context that Claude can use when generating code.
-
-## ✨ Usage Examples
-
-### Fetch React Documentation
-
-```bash
-curl -X POST http://localhost:3000/api/tools/docs-fetcher/fetch \
-  -H "Content-Type: application/json" \
-  -d '{"framework": "react", "processContent": true}'
-```
-
-### Check Latest FastAPI Version
-
-```bash
-curl -X POST http://localhost:3000/api/tools/docs-fetcher/latest-version \
-  -H "Content-Type: application/json" \
-  -d '{"framework": "fastapi"}'
-```
-
-### Use with Claude Code CLI
-
-After [installing the Claude Code plugin](#claude-code-cli-integration):
-
-```bash
-# Fetch latest documentation
-claude docs langchain
-
-# Search documentation
-claude tool:docs-fetcher search --query "agents" --framework langchain
-```
-
 ## 🔜 Future Plans
 
-- **Vector Database**: Add embedding and vector search for documentation
+- **Vector Database Optimization**: Improve vector search for better semantic understanding
 - **Auto-Update System**: Periodic checks for new framework versions
 - **Code Sample Extraction**: Extract and index code examples
-- **Semantic Understanding**: Add semantic parsing of documentation content
-- **CLI Interface**: Command-line tools for managing documentation
+- **Semantic Understanding**: Enhance semantic parsing of documentation content
+- **Extended Language Support**: Support for filtering and processing non-English documentation
+- **Memory Optimization**: Reduce memory footprint for large documentation sets
+- **Cloud Deployment**: Support for cloud deployment and scaling
+
+## 🔧 Advanced Configuration
+
+### Rate Limiting and Scraping Options
+
+The documentation fetcher includes advanced configuration options to control scraping behavior:
+
+```
+# Set delay between scraping requests (milliseconds)
+SCRAPER_REQUEST_DELAY=2000
+
+# Set maximum concurrent scraping operations
+SCRAPER_MAX_CONCURRENT=1
+
+# Control puppeteer browser timeout
+PUPPETEER_TIMEOUT=60000
+
+# Enable/disable headless mode for debugging
+PUPPETEER_HEADLESS=true
+
+# GitHub API token for higher rate limits
+GITHUB_TOKEN=your_github_token
+
+# Content language preferences (default is English-only)
+CONTENT_LANGUAGE=en
+
+# Minimum content quality threshold (0-1)
+CONTENT_QUALITY_THRESHOLD=0.7
+```
+
+These settings help ensure high-quality documentation while respecting website rate limits and prevent being blocked during documentation fetching.
+
+### Language Filtering
+
+By default, the system focuses on English documentation for better quality results:
+
+- Non-English URLs are automatically skipped during crawling
+- Content with explicit non-English language tags (`<html lang="es">`) is filtered
+- Pages with high percentages of non-Latin characters are detected and filtered
+
+This behavior can be customized by modifying the language patterns in the scraper configuration.
+
+### Semantic Search Configuration
+
+The vector-based semantic search system can be customized with these options:
+
+```
+# Search mode (semantic, keyword, hybrid)
+SEARCH_DEFAULT_MODE=hybrid
+
+# Default weight between vector and keyword search (0-1, higher = more semantic)
+SEARCH_HYBRID_ALPHA=0.7
+
+# Vector dimensions for embeddings (default: 384 for all-MiniLM-L6)
+VECTOR_DIMENSIONS=384
+
+# Maximum number of vectors to store
+VECTOR_MAX_ELEMENTS=100000
+```
+
+You can also select different search modes at query time by specifying the `mode` parameter in search requests.
+
+### Error Handling and Robustness
+
+The system implements several strategies to ensure robustness:
+
+- Graceful fallback from semantic to keyword search when needed
+- Automatic recovery and retry for network errors during scraping
+- Rate limit detection and exponential backoff
+- Detailed logging of all operations for easier debugging
+- Memory management for large documentation sets
+
+This ensures that even if parts of the system encounter issues, the overall functionality remains available to Claude for code generation tasks.
 
 ## 📄 License
 

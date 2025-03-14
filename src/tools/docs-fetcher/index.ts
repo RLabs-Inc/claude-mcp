@@ -8,9 +8,10 @@ import { existsSync } from 'node:fs';
 import type { Tool } from '../../types/tool';
 import { getLatestVersion, fetchDocumentation } from './service';
 import { processDocFiles, createDocIndex } from './processors';
-import { FRAMEWORK_REGISTRY } from './registry';
+import { FRAMEWORK_REGISTRY, saveRegistry } from './registry';
 import { logger } from '../../lib/logger';
 import { config } from '../../lib/config';
+import searchRouter from './search';
 
 // Schema validation for endpoints
 const fetchDocsSchema = z.object({
@@ -24,12 +25,15 @@ const versionCheckSchema = z.object({
   framework: z.string().min(1)
 });
 
-const listFrameworksSchema = z.object({
-  type: z.enum(['all', 'npm', 'python', 'github', 'custom']).default('all')
+const addFrameworkSchema = z.object({
+  name: z.string().min(1),
+  type: z.enum(['npm', 'python', 'github', 'custom']),
+  packageName: z.string().optional(),
+  pythonPackage: z.string().optional(),
+  repo: z.string().optional(),
+  docsUrl: z.string().url(),
+  apiDocsUrl: z.string().url().optional(),
 });
-
-// Import search router
-import searchRouter from './search';
 
 // Create router for this tool
 const router = new Hono();
@@ -53,6 +57,44 @@ router.get(
   }
 );
 
+// Add a new framework
+router.post(
+  '/framework',
+  zValidator('json', addFrameworkSchema),
+  async (c) => {
+    const frameworkInfo = c.req.valid('json');
+    const { name } = frameworkInfo;
+    
+    // Check if framework already exists
+    if (FRAMEWORK_REGISTRY[name.toLowerCase()]) {
+      return c.json({ 
+        success: false, 
+        error: `Framework ${name} already exists` 
+      }, 400);
+    }
+    
+    try {
+      // Add to registry and persist to disk
+      FRAMEWORK_REGISTRY[name.toLowerCase()] = frameworkInfo;
+      saveRegistry(FRAMEWORK_REGISTRY);
+      
+      logger.info(`Added new framework to registry and saved to disk: ${name}`, { type: frameworkInfo.type });
+      
+      return c.json({ 
+        success: true, 
+        message: `Framework ${name} added successfully`,
+        framework: frameworkInfo
+      });
+    } catch (error) {
+      logger.error(`Failed to add framework ${name}`, { error: error.message });
+      return c.json({ 
+        success: false, 
+        error: `Failed to add framework: ${error.message}` 
+      }, 500);
+    }
+  }
+);
+
 // Endpoint to get the latest version of a framework/library
 router.post(
   '/latest-version',
@@ -64,6 +106,7 @@ router.post(
       const version = await getLatestVersion(framework);
       return c.json({ framework, latestVersion: version });
     } catch (error) {
+      logger.error(`Failed to get latest version for ${framework}`, { error: error.message });
       return c.json({ error: `Failed to get latest version: ${error.message}` }, 500);
     }
   }
@@ -74,13 +117,13 @@ router.post(
   '/fetch',
   zValidator('json', fetchDocsSchema),
   async (c) => {
-    const { framework, storageFormat, processContent } = c.req.valid('json');
+    const { framework, storageFormat, processContent, maxPages } = c.req.valid('json');
     
     try {
-      console.log(`Fetching documentation for ${framework} in ${storageFormat} format`);
+      logger.info(`Fetching documentation for ${framework} in ${storageFormat} format`);
       
       // Fetch raw documentation
-      const result = await fetchDocumentation(framework, storageFormat);
+      const result = await fetchDocumentation(framework, storageFormat, maxPages);
       
       // Process the content if requested
       if (processContent && result.files.length > 0) {
@@ -131,7 +174,7 @@ router.post(
         fileCount: result.files.length
       });
     } catch (error) {
-      console.error(`Error in /fetch endpoint:`, error);
+      logger.error(`Error in /fetch endpoint:`, { error: error.message });
       return c.json({ error: `Failed to fetch documentation: ${error.message}` }, 500);
     }
   }
@@ -143,7 +186,7 @@ router.get('/status/:framework', async (c) => {
   
   try {
     // Check if we have documentation for this framework
-    const docsDir = `./docs/${framework}`;
+    const docsDir = join(config.DOCS_STORAGE_PATH || './docs', framework);
     
     try {
       // Read the directory to see what versions we have
@@ -191,9 +234,45 @@ router.get('/status/:framework', async (c) => {
       });
     }
   } catch (error) {
+    logger.error(`Failed to check documentation status for ${framework}`, { error: error.message });
     return c.json({ error: `Failed to check documentation status: ${error.message}` }, 500);
   }
 });
+
+// Delete a framework from the registry
+router.delete(
+  '/framework/:name',
+  async (c) => {
+    const name = c.req.param('name').toLowerCase();
+    
+    // Check if framework exists
+    if (!FRAMEWORK_REGISTRY[name]) {
+      return c.json({ 
+        success: false, 
+        error: `Framework ${name} not found` 
+      }, 404);
+    }
+    
+    try {
+      // Remove from registry and persist changes
+      delete FRAMEWORK_REGISTRY[name];
+      saveRegistry(FRAMEWORK_REGISTRY);
+      
+      logger.info(`Deleted framework from registry: ${name}`);
+      
+      return c.json({ 
+        success: true, 
+        message: `Framework ${name} deleted successfully` 
+      });
+    } catch (error) {
+      logger.error(`Failed to delete framework ${name}`, { error: error.message });
+      return c.json({ 
+        success: false, 
+        error: `Failed to delete framework: ${error.message}` 
+      }, 500);
+    }
+  }
+);
 
 // Mount search endpoints
 router.route('/search', searchRouter);

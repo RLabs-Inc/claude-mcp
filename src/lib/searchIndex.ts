@@ -114,6 +114,27 @@ class SearchIndex {
   }
 
   /**
+   * Get statistics about the search index
+   */
+  async getStats(): Promise<{
+    documentCount: number;
+    frameworkCount: number;
+    frameworks: string[];
+  }> {
+    await this.initialize();
+    
+    // Get unique frameworks
+    const frameworks = new Set<string>();
+    this.documents.forEach(doc => frameworks.add(doc.framework));
+    
+    return {
+      documentCount: this.documents.length,
+      frameworkCount: frameworks.size,
+      frameworks: Array.from(frameworks)
+    };
+  }
+  
+  /**
    * Search the index for documents matching the query
    */
   async search(query: string, options: { 

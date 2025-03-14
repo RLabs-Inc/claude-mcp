@@ -1,7 +1,4 @@
 import puppeteer from 'puppeteer';
-import * as cheerio from 'cheerio';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { logger } from '../../../lib/logger';
 import { config } from '../../../lib/config';
 
@@ -9,156 +6,133 @@ import { config } from '../../../lib/config';
  * Base interface for all documentation scrapers
  */
 export interface DocsScraper {
-  fetchDocs(framework: string, version: string, outputDir: string): Promise<string[]>;
+  fetchDocs(framework: string, version: string, outputDir: string, maxPages?: number): Promise<string[]>;
 }
 
 /**
- * Base scraper with common functionality for all scrapers
+ * Base scraper with common functionality
  */
 export abstract class BaseScraper implements DocsScraper {
   /**
-   * The maximum number of retries for failed requests
-   */
-  protected maxRetries: number = 3;
-  
-  /**
-   * Delay between retries in milliseconds
-   */
-  protected retryDelay: number = 1000;
-
-  /**
    * Main method to fetch documentation
    */
-  abstract fetchDocs(framework: string, version: string, outputDir: string): Promise<string[]>;
+  abstract fetchDocs(framework: string, version: string, outputDir: string, maxPages?: number): Promise<string[]>;
 
   /**
    * Create a new browser instance with the configured options
    */
   protected async createBrowser() {
-    return puppeteer.launch({
-      headless: config.PUPPETEER_HEADLESS ? 'new' : false,
-      timeout: config.PUPPETEER_TIMEOUT,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-  }
-
-  /**
-   * Fetch a URL with retry mechanism
-   */
-  protected async fetchWithRetry(url: string, options?: RequestInit): Promise<Response> {
-    let lastError;
+    logger.info(`Launching browser with timeout ${config.PUPPETEER_TIMEOUT || 60000}ms`);
     
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        const response = await fetch(url, options);
-        
-        if (response.ok) {
-          return response;
-        }
-        
-        lastError = new Error(`HTTP error: ${response.status} ${response.statusText}`);
-      } catch (error) {
-        lastError = error;
-        logger.warn(`Fetch attempt ${attempt} failed for ${url}`, { error: error.message });
-      }
-      
-      // If we've reached the max retries, don't wait
-      if (attempt < this.maxRetries) {
-        // Exponential backoff
-        const delay = this.retryDelay * Math.pow(2, attempt - 1);
-        logger.debug(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    
-    throw lastError;
-  }
-
-  /**
-   * Navigate to a page with retry mechanism
-   */
-  protected async navigateWithRetry(page: puppeteer.Page, url: string): Promise<void> {
-    let lastError;
-    
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        await page.goto(url, { 
-          waitUntil: 'networkidle2',
-          timeout: config.PUPPETEER_TIMEOUT
-        });
-        return;
-      } catch (error) {
-        lastError = error;
-        logger.warn(`Navigation attempt ${attempt} failed for ${url}`, { error: error.message });
-      }
-      
-      // If we've reached the max retries, don't wait
-      if (attempt < this.maxRetries) {
-        // Exponential backoff
-        const delay = this.retryDelay * Math.pow(2, attempt - 1);
-        logger.debug(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-    
-    throw lastError;
-  }
-
-  /**
-   * Save content to a file and handle directories
-   */
-  protected async saveToFile(filePath: string, content: string): Promise<void> {
     try {
-      // Create directory if it doesn't exist
-      const dir = join(filePath, '..');
-      await mkdir(dir, { recursive: true });
+      // Add more stability options to ensure clean browser operation
+      const browser = await puppeteer.launch({
+        headless: 'new',
+        timeout: config.PUPPETEER_TIMEOUT || 60000,
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox', 
+          '--disable-dev-shm-usage',
+          '--disable-extensions',
+          '--disable-gpu',
+          '--disable-translate',
+          '--disable-notifications',
+          '--disable-infobars',
+          '--window-size=1366,768',
+          '--single-process', // Less resource usage
+          '--no-zygote'       // More stability
+        ],
+        // Set a reasonable default viewport
+        defaultViewport: {
+          width: 1366,
+          height: 768
+        },
+        // Increase browser stability
+        ignoreHTTPSErrors: true,
+        handleSIGINT: true,
+        handleSIGTERM: true,
+        handleSIGHUP: true,
+      });
       
-      // Save content
-      await writeFile(filePath, content);
+      // Set up clean termination handling
+      process.on('SIGINT', async () => {
+        logger.info('SIGINT received, closing browser');
+        await browser.close();
+        process.exit(0);
+      });
+      
+      process.on('SIGTERM', async () => {
+        logger.info('SIGTERM received, closing browser');
+        await browser.close();
+        process.exit(0);
+      });
+      
+      logger.info('Browser launched successfully');
+      return browser;
     } catch (error) {
-      logger.error(`Failed to save content to ${filePath}`, { error: error.message });
+      logger.error('Failed to launch browser', { error: error.message });
       throw error;
     }
   }
 
   /**
-   * Clean up HTML by removing unnecessary elements
+   * Navigate to a page with retry mechanism and rate limiting
    */
-  protected cleanHtml(html: string): string {
-    const $ = cheerio.load(html);
+  protected async navigateWithRetry(page: puppeteer.Page, url: string): Promise<void> {
+    const maxRetries = 3;
+    const timeout = config.PUPPETEER_TIMEOUT || 60000;
     
-    // Remove unnecessary elements
-    $('script, style, iframe, noscript').remove();
-    
-    // Remove common navigation and non-content elements
-    $('.navigation, .sidebar, .nav, .menu, .footer, .header, nav, footer, header').remove();
-    
-    // Return clean HTML
-    return $.html();
-  }
-
-  /**
-   * Extract the main content from a page
-   */
-  protected extractMainContent(html: string): { title: string, content: string } {
-    const $ = cheerio.load(html);
-    
-    // Try to find the title
-    const title = $('h1').first().text().trim() || 
-                 $('title').text().trim() || 
-                 'Untitled';
-    
-    // Try to find the main content
-    let mainContent = $('main, article, .content, .documentation, .docs-content, .markdown-body').first();
-    
-    // If no specialized content area is found, use the body as fallback
-    if (!mainContent.length) {
-      mainContent = $('body');
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Log navigation attempt
+        logger.info(`Navigating to ${url} (attempt ${attempt}/${maxRetries})`);
+        
+        // Navigate to page with timeout
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded',
+          timeout
+        });
+        
+        // Wait for some content to load
+        await Promise.race([
+          page.waitForSelector('h1, h2, p, .content, article, main', { timeout: 5000 }),
+          new Promise(resolve => setTimeout(resolve, 5000))
+        ]);
+        
+        // Check for rate limiting by looking for common indicators
+        const isRateLimited = await page.evaluate(() => {
+          const body = document.body.textContent?.toLowerCase() || '';
+          return body.includes('rate limit') || 
+                 body.includes('too many requests') || 
+                 body.includes('try again later') ||
+                 body.includes('rate exceeded');
+        });
+        
+        if (isRateLimited) {
+          logger.warn(`Rate limit detected on ${url}`);
+          
+          if (attempt < maxRetries) {
+            // Exponential backoff
+            const backoffTime = 30000 * Math.pow(2, attempt - 1); // 30s, 60s, 120s...
+            logger.info(`Backing off for ${backoffTime/1000}s before retry`);
+            await new Promise(resolve => setTimeout(resolve, backoffTime));
+            continue;
+          }
+        }
+        
+        logger.info(`Successfully loaded ${url}`);
+        return;
+      } catch (error) {
+        logger.warn(`Navigation attempt ${attempt} failed for ${url}`, { error: error.message });
+        
+        if (attempt < maxRetries) {
+          // Simple exponential backoff
+          const backoff = 2000 * Math.pow(2, attempt - 1);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+        } else {
+          throw new Error(`Failed to navigate to ${url} after ${maxRetries} attempts: ${error.message}`);
+        }
+      }
     }
-    
-    return {
-      title,
-      content: mainContent.html() || ''
-    };
   }
 }

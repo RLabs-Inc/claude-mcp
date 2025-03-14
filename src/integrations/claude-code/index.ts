@@ -29,15 +29,15 @@ function generateToolCommands(): { name: string; description: string; usage: str
   // Add docs fetcher commands specifically
   if (tools['docs-fetcher']) {
     commands.push({
-      name: 'docs',
-      description: 'Access framework documentation',
-      usage: 'claude docs <framework> [--version <version>]'
+      name: 'fetch-docs',
+      description: 'Access framework documentation (renamed from docs to avoid collision)',
+      usage: 'claude fetch-docs <framework> [--version <version>]'
     });
 
     commands.push({
-      name: 'versions',
+      name: 'list-versions',
       description: 'List available versions of a framework',
-      usage: 'claude versions <framework>'
+      usage: 'claude list-versions <framework>'
     });
   }
 
@@ -100,6 +100,14 @@ export async function installClaudeCodePlugin(serverUrl: string = 'http://localh
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 const serverUrl = '${serverUrl}';
 
+// Common headers for all Claude Code API requests
+const claudeCodeHeaders = {
+  'Content-Type': 'application/json',
+  'User-Agent': 'Claude-Code-Client/1.0',
+  'X-Claude-Code-Client': 'true',
+  'X-Client-Id': process.env.CLAUDE_CODE_CLIENT_ID || 'claude-code-cli'
+};
+
 async function main() {
   const args = process.argv.slice(2);
   
@@ -114,9 +122,9 @@ async function main() {
 
   // Handle specific commands
   try {
-    if (command === 'docs') {
+    if (command === 'fetch-docs') {
       if (args.includes('--help')) {
-        console.log('Usage: claude docs <framework> [--version <version>]');
+        console.log('Usage: claude fetch-docs <framework> [--version <version>]');
         console.log('\\nFetch and prepare documentation for a framework or library.');
         process.exit(0);
       }
@@ -124,7 +132,7 @@ async function main() {
       const framework = args[1];
       if (!framework) {
         console.error('Error: Framework name required');
-        console.log('Usage: claude docs <framework> [--version <version>]');
+        console.log('Usage: claude fetch-docs <framework> [--version <version>] [--maxpages <number>]');
         process.exit(1);
       }
 
@@ -134,13 +142,24 @@ async function main() {
       if (versionFlag !== -1 && args.length > versionFlag + 1) {
         version = args[versionFlag + 1];
       }
+      
+      // Check if maxpages is specified
+      const maxPagesFlag = args.indexOf('--maxpages');
+      let maxPages;
+      if (maxPagesFlag !== -1 && args.length > maxPagesFlag + 1) {
+        maxPages = parseInt(args[maxPagesFlag + 1], 10);
+        if (isNaN(maxPages)) {
+          console.error('Error: maxpages must be a number');
+          process.exit(1);
+        }
+      }
 
       // Get docs for the framework
-      await fetchDocs(framework, version);
+      await fetchDocs(framework, version, maxPages);
     } 
-    else if (command === 'versions') {
+    else if (command === 'list-versions') {
       if (args.includes('--help')) {
-        console.log('Usage: claude versions <framework>');
+        console.log('Usage: claude list-versions <framework>');
         console.log('\\nList available versions of a framework or library.');
         process.exit(0);
       }
@@ -148,7 +167,7 @@ async function main() {
       const framework = args[1];
       if (!framework) {
         console.error('Error: Framework name required');
-        console.log('Usage: claude versions <framework>');
+        console.log('Usage: claude list-versions <framework>');
         process.exit(1);
       }
 
@@ -195,26 +214,67 @@ async function main() {
 }
 
 // Documentation tool functions
-async function fetchDocs(framework, version) {
+async function fetchDocs(framework, version, maxPages) {
   console.log(\`Fetching documentation for \${framework}...\`);
   
-  // First check if we already have the docs
-  const statusResponse = await fetch(\`\${serverUrl}/api/tools/docs-fetcher/status/\${framework}\`);
+  // First verify if the framework exists in the registry
+  try {
+    const frameworksResponse = await fetch(
+      \`\${serverUrl}/api/tools/docs-fetcher/frameworks\`,
+      { headers: claudeCodeHeaders }
+    );
+    const frameworksData = await frameworksResponse.json();
+    
+    const frameworkExists = frameworksData.frameworks.some(f => 
+      f.name.toLowerCase() === framework.toLowerCase()
+    );
+    
+    if (!frameworkExists) {
+      console.log("Framework '" + framework + "' not found in registry.");
+      console.log('');
+      console.log('Would you like to add it? Run:');
+      console.log('bun docadd add');
+      console.log('');
+      console.log('Available frameworks:');
+      frameworksData.frameworks.forEach(f => console.log('- ' + f.name + ' (' + f.type + ')'));
+      return;
+    }
+  } catch (error) {
+    console.log('Error checking framework registry:', error.message);
+  }
+  
+  // Check if we already have the docs
+  const statusResponse = await fetch(
+    \`\${serverUrl}/api/tools/docs-fetcher/status/\${framework}\`,
+    { headers: claudeCodeHeaders }
+  );
   const statusData = await statusResponse.json();
   
   if (!statusData.available || (version && !statusData.versions.some(v => v.version === version))) {
     console.log('Documentation not found locally. Fetching from source...');
     
+    // Build the request body
+    const requestBody: any = { 
+      framework,
+      storageFormat: 'markdown',
+      processContent: true
+    };
+    
+    // Add maxPages if specified
+    if (maxPages) {
+      requestBody.maxPages = maxPages;
+      console.log(\`Limiting to \${maxPages} pages\`);
+    }
+    
     // Fetch documentation from source
-    const fetchResponse = await fetch(\`\${serverUrl}/api/tools/docs-fetcher/fetch\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        framework,
-        storageFormat: 'markdown',
-        processContent: true
-      })
-    });
+    const fetchResponse = await fetch(
+      \`\${serverUrl}/api/tools/docs-fetcher/fetch\`,
+      {
+        method: 'POST',
+        headers: claudeCodeHeaders,
+        body: JSON.stringify(requestBody)
+      }
+    );
     
     const fetchData = await fetchResponse.json();
     
@@ -240,7 +300,36 @@ async function fetchDocs(framework, version) {
 }
 
 async function listVersions(framework) {
-  const response = await fetch(\`\${serverUrl}/api/tools/docs-fetcher/status/\${framework}\`);
+  // First verify if the framework exists in the registry
+  try {
+    const frameworksResponse = await fetch(
+      \`\${serverUrl}/api/tools/docs-fetcher/frameworks\`,
+      { headers: claudeCodeHeaders }
+    );
+    const frameworksData = await frameworksResponse.json();
+    
+    const frameworkExists = frameworksData.frameworks.some(f => 
+      f.name.toLowerCase() === framework.toLowerCase()
+    );
+    
+    if (!frameworkExists) {
+      console.log("Framework '" + framework + "' not found in registry.");
+      console.log('');
+      console.log('Would you like to add it? Run:');
+      console.log('bun docadd add');
+      console.log('');
+      console.log('Available frameworks:');
+      frameworksData.frameworks.forEach(f => console.log('- ' + f.name + ' (' + f.type + ')'));
+      return;
+    }
+  } catch (error) {
+    console.log('Error checking framework registry:', error.message);
+  }
+
+  const response = await fetch(
+    \`\${serverUrl}/api/tools/docs-fetcher/status/\${framework}\`,
+    { headers: claudeCodeHeaders }
+  );
   const data = await response.json();
   
   if (data.error) {
@@ -250,11 +339,14 @@ async function listVersions(framework) {
   if (!data.available) {
     console.log(\`No documentation available for \${framework}. Checking latest version...\`);
     
-    const versionResponse = await fetch(\`\${serverUrl}/api/tools/docs-fetcher/latest-version\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ framework })
-    });
+    const versionResponse = await fetch(
+      \`\${serverUrl}/api/tools/docs-fetcher/latest-version\`,
+      {
+        method: 'POST',
+        headers: claudeCodeHeaders,
+        body: JSON.stringify({ framework })
+      }
+    );
     
     const versionData = await versionResponse.json();
     
@@ -263,7 +355,7 @@ async function listVersions(framework) {
     }
     
     console.log(\`Latest version: \${versionData.latestVersion}\`);
-    console.log('Use "claude docs <framework>" to fetch the documentation.');
+    console.log('Use "claude fetch-docs <framework>" to fetch the documentation.');
   } else {
     console.log(\`\${framework} documentation:\`);
     console.log(\`Latest version: \${data.latestVersion}\`);
@@ -275,7 +367,7 @@ async function listVersions(framework) {
     });
     
     if (!data.upToDate) {
-      console.log(\`\nA newer version (\${data.latestVersion}) is available. Run "claude docs \${framework}" to fetch it.\`);
+      console.log(\`\nA newer version (\${data.latestVersion}) is available. Run "claude fetch-docs \${framework}" to fetch it.\`);
     }
   }
 }
@@ -283,7 +375,10 @@ async function listVersions(framework) {
 // General tool management functions
 async function listTools() {
   try {
-    const response = await fetch(\`\${serverUrl}/\`);
+    const response = await fetch(
+      \`\${serverUrl}/\`,
+      { headers: claudeCodeHeaders }
+    );
     const data = await response.json();
     
     console.log('Available MCP tools:');
@@ -302,7 +397,10 @@ async function listTools() {
 async function getToolInfo(toolName) {
   try {
     // Get tool info
-    const response = await fetch(\`\${serverUrl}/api/tools/\${toolName}\`);
+    const response = await fetch(
+      \`\${serverUrl}/api/tools/\${toolName}\`,
+      { headers: claudeCodeHeaders }
+    );
     
     if (!response.ok) {
       if (response.status === 404) {
@@ -337,7 +435,10 @@ async function getToolInfo(toolName) {
 async function callTool(toolName, args) {
   try {
     // First, check if the tool exists
-    const baseResponse = await fetch(\`\${serverUrl}/\`);
+    const baseResponse = await fetch(
+      \`\${serverUrl}/\`,
+      { headers: claudeCodeHeaders }
+    );
     const baseData = await baseResponse.json();
     
     if (!baseData.availableTools.includes(toolName)) {
@@ -355,7 +456,10 @@ async function callTool(toolName, args) {
     const endpoint = \`\${serverUrl}/api/tools/\${toolName}/\${args[0] || ''}\`;
     
     console.log(\`Calling: \${endpoint}\`);
-    const response = await fetch(endpoint);
+    const response = await fetch(
+      endpoint,
+      { headers: claudeCodeHeaders }
+    );
     
     if (!response.ok) {
       console.error(\`Error: \${response.statusText}\`);
@@ -385,8 +489,8 @@ main();
 export CLAUDE_CODE_PLUGIN_PATH="${PLUGIN_DIR}:$CLAUDE_CODE_PLUGIN_PATH"
 
 echo "Claude MCP plugin activated. Available commands:"
-echo "  claude docs <framework> - Access framework documentation"
-echo "  claude versions <framework> - List available versions of a framework"
+echo "  claude fetch-docs <framework> - Access framework documentation"
+echo "  claude list-versions <framework> - List available versions of a framework"
 echo "  claude tools - List all available tools"
 echo "  claude tool:<tool-name> - Use a specific tool"
 echo ""

@@ -11,18 +11,24 @@
     "build": "bun build ./src/index.ts --target bun --outdir ./dist",
     "typecheck": "tsc --noEmit",
     "format": "prettier --write 'src/**/*.{ts,tsx,js,jsx}'",
-    "clean": "rm -rf dist docs/*/*/processed"
+    "clean": "rm -rf dist docs/*/*/processed",
+    "docadd": "bun run src/tools/docs-fetcher/cli.ts"
   },
   "dependencies": {
-    "hono": "^3.10.2",
     "@hono/node-server": "^1.2.0",
     "@hono/zod-validator": "^0.1.8",
-    "zod": "^3.22.4",
+    "@inquirer/prompts": "^3.0.0",
+    "@xenova/transformers": "^2.17.2",
     "cheerio": "^1.0.0-rc.12",
-    "puppeteer": "^21.5.2",
+    "commander": "^11.0.0",
+    "hnswlib-node": "^3.0.0",
+    "hono": "^3.10.2",
     "marked": "^9.1.5",
+    "node-fetch": "^3.3.2",
+    "puppeteer": "19.9",
     "turndown": "^7.1.2",
-    "node-fetch": "^3.3.2"
+    "uuid": "^11.1.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
     "bun-types": "latest",

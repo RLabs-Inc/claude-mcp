@@ -24,7 +24,11 @@ const configSchema = z.object({
   
   // Puppeteer
   PUPPETEER_HEADLESS: z.string().transform(val => val === 'true').default('true'),
-  PUPPETEER_TIMEOUT: z.string().transform(val => parseInt(val, 10)).default('30000'),
+  PUPPETEER_TIMEOUT: z.string().transform(val => parseInt(val, 10)).default('60000'),
+  
+  // Scraper Configuration
+  SCRAPER_REQUEST_DELAY: z.string().transform(val => parseInt(val, 10)).default('1000'),
+  SCRAPER_MAX_CONCURRENT: z.string().transform(val => parseInt(val, 10)).default('1'),
   
   // Rate Limiting
   RATE_LIMIT_ENABLED: z.string().transform(val => val === 'true').default('false'),

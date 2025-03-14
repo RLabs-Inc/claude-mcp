@@ -1,9 +1,10 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import * as cheerio from 'cheerio';
 import { marked } from 'marked';
 import TurndownService from 'turndown';
 import { searchIndex } from '../../lib/searchIndex';
+import { vectorStore } from '../../lib/vectorStore';
 import { logger } from '../../lib/logger';
 
 /**
@@ -23,14 +24,49 @@ export async function processDocFiles(
   });
   
   logger.info(`Processing ${files.length} documentation files`, { format, framework, version });
+  console.log(`Processing ${files.length} documentation files`);
+  console.log(`Files: ${files.join(', ')}`);
+  
+  // Create output directory if it doesn't exist
+  try {
+    await mkdir(outputDir, { recursive: true });
+    console.log(`Created output directory: ${outputDir}`);
+  } catch (error) {
+    logger.error(`Failed to create output directory: ${outputDir}`, { error: error.message });
+    console.error(`Failed to create output directory: ${outputDir}`, error);
+  }
   
   for (const file of files) {
     try {
+      console.log(`Processing file: ${file}`);
+      
       // Read the raw HTML file
       const content = await readFile(file, 'utf-8');
+      console.log(`Read file content: ${content.length} characters`);
       
       // Parse with cheerio to extract useful content
       const $ = cheerio.load(content);
+      
+      // Check for non-English content
+      const htmlLang = $('html').attr('lang')?.toLowerCase();
+      const metaLang = $('meta[http-equiv="Content-Language"]').attr('content')?.toLowerCase();
+      const bodyText = $('body').text().slice(0, 500); // Sample for language detection
+      
+      // Skip if explicitly non-English
+      if ((htmlLang && htmlLang !== 'en' && !htmlLang.startsWith('en-')) || 
+          (metaLang && metaLang !== 'en' && !metaLang.startsWith('en-'))) {
+        logger.warn(`Skipping non-English content (${htmlLang || metaLang}): ${file}`);
+        continue;
+      }
+      
+      // Heuristic check for non-Latin content
+      const nonLatinChars = (bodyText.match(/[^\x00-\x7F]/g) || []).length;
+      const totalChars = bodyText.length;
+      
+      if (totalChars > 0 && (nonLatinChars / totalChars) > 0.3) { // >30% non-Latin is likely non-English
+        logger.warn(`Skipping likely non-English content: ${file} (${Math.round(nonLatinChars / totalChars * 100)}% non-Latin)`);
+        continue;
+      }
       
       // Remove unnecessary elements
       $('script, style, nav, footer, header, .sidebar, .navigation, .menu, .toc, .search').remove();
@@ -69,9 +105,10 @@ export async function processDocFiles(
         await writeFile(outputPath, markdown);
       }
       
-      // Add to search index if framework and version are provided
+      // Add to search indexes if framework and version are provided
       if (framework && version) {
         try {
+          // Add to keyword search index
           await searchIndex.addDocument({
             framework,
             version,
@@ -79,8 +116,39 @@ export async function processDocFiles(
             title,
             content: markdownContent
           });
+          
+          // Add to vector search index if initialized
+          try {
+            // Construct URL from the file path if available
+            const metaUrl = $('meta[name="source-url"]').attr('content');
+            
+            // Ensure vector store is initialized
+            if (!vectorStore.isInitialized()) {
+              logger.info('Vector store not yet initialized, initializing now');
+              await vectorStore.initialize();
+            }
+            
+            logger.info(`Adding document "${title}" to vector store`);
+            
+            const docId = await vectorStore.addDocument({
+              framework,
+              version,
+              path: outputPath,
+              title,
+              content: markdownContent,
+              url: metaUrl || file
+            });
+            
+            logger.info(`Added document to vector store with ID: ${docId}`);
+          } catch (vectorError) {
+            logger.warn('Failed to add document to vector store (continuing)', { 
+              error: vectorError.message,
+              file,
+              title
+            });
+          }
         } catch (error) {
-          logger.error('Failed to add document to search index', { 
+          logger.error('Failed to add document to search indexes', { 
             error: error.message,
             file,
             framework,

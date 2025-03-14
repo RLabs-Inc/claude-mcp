@@ -12,6 +12,7 @@ import { config } from './lib/config';
 import { errorHandler } from './middleware/errorHandler';
 import { apiKeyAuth } from './middleware/auth';
 import { rateLimit } from './middleware/rateLimit';
+import { vectorStore } from './lib/vectorStore';
 
 // Validate required environment variables
 if (config.NODE_ENV === 'production' && !config.API_KEY) {
@@ -56,6 +57,11 @@ if (config.API_KEY && config.NODE_ENV === 'production') {
 } else {
   logger.info('API Authentication disabled - running in open mode');
 }
+
+// Initialize vector store in the background
+vectorStore.initialize().catch(error => {
+  logger.error('Failed to initialize vector store', { error: error.message });
+});
 
 // Load all tools dynamically
 const tools = loadTools();
